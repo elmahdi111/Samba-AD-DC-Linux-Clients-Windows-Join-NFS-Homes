@@ -17,6 +17,20 @@ systemctl enable --now firewalld
 
 ---
 
+## 0.1 Set IP and Hostname
+```bash
+hostnamectl set-hostname server1.tp.local
+nmcli con mod "System eth0" ipv4.addresses 192.168.100.10/24
+nmcli con mod "System eth0" ipv4.gateway 192.168.100.1
+nmcli con mod "System eth0" ipv4.dns 192.168.100.10
+nmcli con mod "System eth0" ipv4.method manual
+nmcli con up "System eth0"
+ip addr show
+hostname
+```
+
+---
+
 ## 1. Stop everything (clean state)
 ```bash
 systemctl stop samba
@@ -134,14 +148,37 @@ host server1.tp.local 127.0.0.1
 
 # 🐧 B. LINUX CLIENT
 
+## 0. Set IP and Hostname
+```bash
+hostnamectl set-hostname client1.tp.local
+nmcli con mod "System eth0" ipv4.addresses 192.168.100.20/24
+nmcli con mod "System eth0" ipv4.gateway 192.168.100.1
+nmcli con mod "System eth0" ipv4.dns 192.168.100.10
+nmcli con mod "System eth0" ipv4.method manual
+nmcli con up "System eth0"
+ip addr show
+hostname
+```
+
+## Configure DNS
 ```bash
 echo "nameserver 192.168.100.10" > /etc/resolv.conf
+```
+
+## Test DNS Resolution
+```bash
 host tp.local
 host server1.tp.local
+```
 
+## Test Kerberos
+```bash
 kinit Administrator
 klist
+```
 
+## Test LDAP / AD Connectivity
+```bash
 ldapsearch -x -H ldap://192.168.100.10 -b "dc=tp,dc=local"
 ```
 
@@ -149,11 +186,69 @@ ldapsearch -x -H ldap://192.168.100.10 -b "dc=tp,dc=local"
 
 # 🪟 C. WINDOWS CLIENT
 
-DNS, Time Sync, Firewall, AD Test, Domain Join commands (as before)...
+## 0. Set IP and Hostname
+```powershell
+Rename-Computer -NewName WINCLIENT1 -Force
+New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.100.30 -PrefixLength 24 -DefaultGateway 192.168.100.1
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses 192.168.100.10
+Get-NetIPAddress
+Get-DnsClientServerAddress
+```
+
+## 1. Time Sync – Windows Time Service
+```powershell
+Start-Service w32time
+Set-Service w32time -StartupType Automatic
+
+w32tm /config /manualpeerlist:"192.168.100.10" /syncfromflags:manual /update
+w32tm /resync
+w32tm /query /status
+
+klist purge
+```
+
+## 2. Firewall – Allow AD/DC ports
+```powershell
+New-NetFirewallRule -DisplayName "Allow Kerberos TCP 88" -Direction Inbound -Protocol TCP -LocalPort 88 -Action Allow
+New-NetFirewallRule -DisplayName "Allow Kerberos UDP 88" -Direction Inbound -Protocol UDP -LocalPort 88 -Action Allow
+
+New-NetFirewallRule -DisplayName "Allow LDAP TCP 389" -Direction Inbound -Protocol TCP -LocalPort 389 -Action Allow
+New-NetFirewallRule -DisplayName "Allow LDAP UDP 389" -Direction Inbound -Protocol UDP -LocalPort 389 -Action Allow
+
+New-NetFirewallRule -DisplayName "Allow SMB TCP 445" -Direction Inbound -Protocol TCP -LocalPort 445 -Action Allow
+New-NetFirewallRule -DisplayName "Allow NetBIOS TCP 139" -Direction Inbound -Protocol TCP -LocalPort 139 -Action Allow
+New-NetFirewallRule -DisplayName "Allow NetBIOS UDP 137" -Direction Inbound -Protocol UDP -LocalPort 137 -Action Allow
+New-NetFirewallRule -DisplayName "Allow NetBIOS UDP 138" -Direction Inbound -Protocol UDP -LocalPort 138 -Action Allow
+
+New-NetFirewallRule -DisplayName "Allow RPC TCP 135" -Direction Inbound -Protocol TCP -LocalPort 135 -Action Allow
+
+New-NetFirewallRule -DisplayName "Allow DNS TCP/UDP 53" -Direction Inbound -Protocol TCP -LocalPort 53 -Action Allow
+New-NetFirewallRule -DisplayName "Allow DNS UDP 53" -Direction Inbound -Protocol UDP -LocalPort 53 -Action Allow
+```
+
+## 3. Test AD/DC Connectivity
+```powershell
+Test-NetConnection 192.168.100.10 -Port 88
+Test-NetConnection 192.168.100.10 -Port 389
+Test-NetConnection 192.168.100.10 -Port 445
+Test-NetConnection 192.168.100.10 -Port 135
+Test-NetConnection 192.168.100.10 -Port 53
+```
+
+## 4. Join Domain
+```powershell
+Add-Computer -DomainName tp.local -Credential TP\Administrator -Restart
+```
+
+## Verify Domain
+```powershell
+nltest /dsgetdc:tp.local
+nltest /sc_query:tp.local
+```
 
 ---
 
-# 👥 D. ADD USERS TO GROUPS
+# 👥 D. ADD USERS TO GROUPS (SERVER SIDE)
 ```bash
 sudo bash << 'EOF'
 samba-tool group addmembers IT alice,bob
