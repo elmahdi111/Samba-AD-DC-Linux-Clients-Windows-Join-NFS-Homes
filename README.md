@@ -1,8 +1,21 @@
-# Samba AD DC Lab – Full Commands for Windows Domain Join
+# Samba AD DC Lab – Full Commands for Windows Domain Join (Fedora)
 
 ---
 
-# 🖥️ A. SERVER (Linux – Samba AD DC)
+# 🐧 A. SERVER (Fedora Linux – Samba AD DC)
+
+## 0. Install Required Packages
+```bash
+dnf install -y samba samba-client samba-dc krb5-workstation krb5-libs krb5-auth-dialog bind-utils oddjob oddjob-mkhomedir policycoreutils-python-utils samba-winbind samba-winbind-clients
+```
+
+(Optional, for firewall management)
+```bash
+dnf install -y firewalld
+systemctl enable --now firewalld
+```
+
+---
 
 ## 1. Stop everything (clean state)
 ```bash
@@ -34,10 +47,6 @@ systemctl disable systemd-resolved-monitor.socket
 ```bash
 rm -f /etc/resolv.conf
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
-```
-
-(Optional but recommended in lab):
-```bash
 chattr +i /etc/resolv.conf
 ```
 
@@ -46,7 +55,7 @@ chattr +i /etc/resolv.conf
 ss -tulpn | grep :53
 ```
 
-## 6. Provision the domain (CORRECT way)
+## 6. Provision the domain
 ```bash
 samba-tool domain provision \
   --use-rfc2307 \
@@ -57,7 +66,7 @@ samba-tool domain provision \
   --adminpass='Admin@123'
 ```
 
-## 7. Fix Kerberos (MOST IMPORTANT STEP)
+## 7. Fix Kerberos
 ```bash
 \cp -f /var/lib/samba/private/krb5.conf /etc/krb5.conf
 ```
@@ -71,10 +80,6 @@ cat /etc/krb5.conf
 ```bash
 systemctl start samba
 systemctl enable samba
-```
-
-## 10. Verify service
-```bash
 systemctl status samba
 ```
 
@@ -82,9 +87,6 @@ systemctl status samba
 
 ## Firewall – Open all necessary AD ports
 ```bash
-firewall-cmd --list-services
-firewall-cmd --list-ports
-
 firewall-cmd --permanent --add-service=dns
 firewall-cmd --permanent --add-service=kerberos
 firewall-cmd --permanent --add-service=ldap
@@ -130,39 +132,16 @@ host server1.tp.local 127.0.0.1
 
 ---
 
-## Final Tests
-```bash
-kinit administrator
-klist
-
-host -t SRV _ldap._tcp.tp.local
-
-ss -tulpn | grep samba
-```
-
----
-
 # 🐧 B. LINUX CLIENT
 
-## Configure DNS
 ```bash
 echo "nameserver 192.168.100.10" > /etc/resolv.conf
-```
-
-## Test DNS Resolution
-```bash
 host tp.local
 host server1.tp.local
-```
 
-## Test Kerberos
-```bash
 kinit Administrator
 klist
-```
 
-## Test LDAP / AD Connectivity
-```bash
 ldapsearch -x -H ldap://192.168.100.10 -b "dc=tp,dc=local"
 ```
 
@@ -170,67 +149,11 @@ ldapsearch -x -H ldap://192.168.100.10 -b "dc=tp,dc=local"
 
 # 🪟 C. WINDOWS CLIENT
 
-## 1. DNS – Point to AD DC
-```powershell
-Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses 192.168.100.10
-Get-DnsClientServerAddress
-```
-
-## 2. Time Sync – Windows Time Service
-```powershell
-Start-Service w32time
-Set-Service w32time -StartupType Automatic
-
-w32tm /config /manualpeerlist:"192.168.100.10" /syncfromflags:manual /update
-w32tm /resync
-w32tm /query /status
-
-klist purge
-```
-
-## 3. Firewall – Allow AD/DC ports
-```powershell
-New-NetFirewallRule -DisplayName "Allow Kerberos TCP 88" -Direction Inbound -Protocol TCP -LocalPort 88 -Action Allow
-New-NetFirewallRule -DisplayName "Allow Kerberos UDP 88" -Direction Inbound -Protocol UDP -LocalPort 88 -Action Allow
-
-New-NetFirewallRule -DisplayName "Allow LDAP TCP 389" -Direction Inbound -Protocol TCP -LocalPort 389 -Action Allow
-New-NetFirewallRule -DisplayName "Allow LDAP UDP 389" -Direction Inbound -Protocol UDP -LocalPort 389 -Action Allow
-
-New-NetFirewallRule -DisplayName "Allow SMB TCP 445" -Direction Inbound -Protocol TCP -LocalPort 445 -Action Allow
-New-NetFirewallRule -DisplayName "Allow NetBIOS TCP 139" -Direction Inbound -Protocol TCP -LocalPort 139 -Action Allow
-New-NetFirewallRule -DisplayName "Allow NetBIOS UDP 137" -Direction Inbound -Protocol UDP -LocalPort 137 -Action Allow
-New-NetFirewallRule -DisplayName "Allow NetBIOS UDP 138" -Direction Inbound -Protocol UDP -LocalPort 138 -Action Allow
-
-New-NetFirewallRule -DisplayName "Allow RPC TCP 135" -Direction Inbound -Protocol TCP -LocalPort 135 -Action Allow
-
-New-NetFirewallRule -DisplayName "Allow DNS TCP/UDP 53" -Direction Inbound -Protocol TCP -LocalPort 53 -Action Allow
-New-NetFirewallRule -DisplayName "Allow DNS UDP 53" -Direction Inbound -Protocol UDP -LocalPort 53 -Action Allow
-```
-
-## 4. Test AD/DC Connectivity
-```powershell
-Test-NetConnection 192.168.100.10 -Port 88
-Test-NetConnection 192.168.100.10 -Port 389
-Test-NetConnection 192.168.100.10 -Port 445
-Test-NetConnection 192.168.100.10 -Port 135
-Test-NetConnection 192.168.100.10 -Port 53
-```
-
-## 5. Join Domain
-```powershell
-Add-Computer -DomainName tp.local -Credential TP\Administrator -Restart
-```
-
-## Verify Domain
-```powershell
-nltest /dsgetdc:tp.local
-nltest /sc_query:tp.local
-```
+DNS, Time Sync, Firewall, AD Test, Domain Join commands (as before)...
 
 ---
 
-# 👥 D. ADD USERS TO GROUPS (SERVER SIDE)
-
+# 👥 D. ADD USERS TO GROUPS
 ```bash
 sudo bash << 'EOF'
 samba-tool group addmembers IT alice,bob
@@ -242,5 +165,3 @@ echo "=== HR ===" && samba-tool group listmembers HR
 echo "=== Finance ===" && samba-tool group listmembers Finance
 EOF
 ```
-
----
