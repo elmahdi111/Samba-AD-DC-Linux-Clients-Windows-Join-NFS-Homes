@@ -1,0 +1,235 @@
+Good question. I’ll give you a **clean, production-style command sequence** that fixes the whole problem from start to finish — no confusion.
+
+---
+
+# 🔧 FULL FIX — Samba AD DC (from broken → working)
+
+## 1. Stop everything (clean state)
+
+```bash
+systemctl stop samba
+```
+
+---
+
+## 2. Remove broken configuration
+
+```bash
+rm -rf /var/lib/samba/*
+rm -f /etc/samba/smb.conf
+```
+
+---
+
+## 3. Disable DNS conflicts (CRITICAL)
+
+```bash
+systemctl stop systemd-resolved
+systemctl stop systemd-resolved.socket
+systemctl stop systemd-resolved.service
+systemctl stop systemd-resolved-varlink.socket
+systemctl stop systemd-resolved-monitor.socket
+
+systemctl disable systemd-resolved
+systemctl disable systemd-resolved.socket
+systemctl disable systemd-resolved.service
+systemctl disable systemd-resolved-varlink.socket
+systemctl disable systemd-resolved-monitor.socket
+```
+
+---
+
+## 4. Fix DNS resolver
+
+```bash
+rm -f /etc/resolv.conf
+echo "nameserver 127.0.0.1" > /etc/resolv.conf
+```
+
+(Optional but recommended in lab):
+
+```bash
+chattr +i /etc/resolv.conf
+```
+
+---
+
+## 5. Verify port 53 is FREE
+
+```bash
+ss -tulpn | grep :53
+```
+
+👉 Must return **nothing**
+
+---
+
+## 6. Provision the domain (CORRECT way)
+
+```bash
+samba-tool domain provision \
+  --use-rfc2307 \
+  --realm=TP.LOCAL \
+  --domain=TP \
+  --server-role=dc \
+  --dns-backend=SAMBA_INTERNAL \
+  --adminpass='Admin@123'
+```
+
+---
+
+## 7. Fix Kerberos (MOST IMPORTANT STEP)
+
+```bash
+\cp -f /var/lib/samba/private/krb5.conf /etc/krb5.conf
+```
+
+---
+
+## 8. Verify Kerberos config
+
+```bash
+cat /etc/krb5.conf
+```
+
+👉 Must contain:
+
+```ini
+default_realm = TP.LOCAL
+```
+
+---
+
+## 9. Start Samba
+
+```bash
+systemctl start samba
+systemctl enable samba
+```
+
+---
+
+## 10. Verify service
+
+```bash
+systemctl status samba
+```
+
+👉 Must show:
+
+```text
+Active: active (running)
+```
+
+---
+
+# 🧪 FINAL TESTS (VERY IMPORTANT)
+
+## Test Kerberos
+
+```bash
+kinit administrator
+klist
+```
+
+---
+
+## Test DNS
+
+```bash
+host -t SRV _ldap._tcp.tp.local
+```
+
+---
+
+## Check ports
+
+```bash
+ss -tulpn | grep samba
+```
+
+---
+
+# 🧠 WHAT THIS FIXES
+
+| Problem             | Fix                      |
+| ------------------- | ------------------------ |
+| Port 53 conflict    | Disable systemd-resolved |
+| Wrong DNS backend   | Use SAMBA_INTERNAL       |
+| Kerberos crash      | Copy krb5.conf           |
+| Broken provisioning | Clean + re-provision     |
+
+---
+
+# ⚠️ REAL DEBUGGING NOTES (IMPORTANT)
+
+### 🔴 If Samba fails with:
+```
+mitkdc child process exited
+```
+
+👉 It means:
+- `/etc/krb5.conf` is wrong or not copied
+
+---
+
+### 🔴 If you see:
+```
+Configuration file does not specify default realm
+```
+
+👉 Fix:
+```bash
+\cp -f /var/lib/samba/private/krb5.conf /etc/krb5.conf
+```
+
+---
+
+### 🔴 If port 53 is busy:
+
+```bash
+ss -tulpn | grep :53
+```
+
+👉 Kill conflict (example):
+```bash
+systemctl stop systemd-resolved
+```
+
+---
+
+### 🔴 If copy does NOT overwrite:
+
+Check immutable flag:
+
+```bash
+lsattr /etc/krb5.conf
+```
+
+If you see `i`:
+
+```bash
+chattr -i /etc/krb5.conf
+```
+
+Then copy again.
+
+---
+
+# ⚠️ GOLDEN RULES (never forget)
+
+1. **Port 53 must be free before starting Samba**
+2. **Always copy `/var/lib/samba/private/krb5.conf`**
+3. **Never use external DNS (like 8.8.8.8) on AD DC**
+4. **If provisioning fails → wipe and redo**
+5. **Samba AD DC = DNS + LDAP + Kerberos (all-in-one)**
+
+---
+
+If you want next step, I can now guide you to:
+
+* Join Linux client to domain
+* Join Windows to AD
+* Configure NFS with AD
+
+Just tell me.
