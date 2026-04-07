@@ -1,5 +1,9 @@
 # Samba AD DC Lab – Full Commands for Windows Domain Join
 
+---
+
+# 🖥️ A. SERVER (Linux – Samba AD DC)
+
 ## 1. Stop everything (clean state)
 ```bash
 systemctl stop samba
@@ -31,6 +35,7 @@ systemctl disable systemd-resolved-monitor.socket
 rm -f /etc/resolv.conf
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
 ```
+
 (Optional but recommended in lab):
 ```bash
 chattr +i /etc/resolv.conf
@@ -40,7 +45,6 @@ chattr +i /etc/resolv.conf
 ```bash
 ss -tulpn | grep :53
 ```
-👉 Must return **nothing**
 
 ## 6. Provision the domain (CORRECT way)
 ```bash
@@ -62,10 +66,6 @@ samba-tool domain provision \
 ```bash
 cat /etc/krb5.conf
 ```
-👉 Must contain:
-```ini
-default_realm = TP.LOCAL
-```
 
 ## 9. Start Samba
 ```bash
@@ -77,71 +77,10 @@ systemctl enable samba
 ```bash
 systemctl status samba
 ```
-👉 Must show:
-```text
-Active: active (running)
-```
-
-# 🧪 FINAL TESTS
-
-## Test Kerberos
-```bash
-kinit administrator
-klist
-```
-
-## Test DNS
-```bash
-host -t SRV _ldap._tcp.tp.local
-```
-
-## Check ports
-```bash
-ss -tulpn | grep samba
-```
-
-# 🔧 Troubleshooting Notes
-
-### 🔴 If Samba fails with:
-```
-mitkdc child process exited
-```
-👉 It means `/etc/krb5.conf` is wrong or not copied
-
-### 🔴 If you see:
-```
-Configuration file does not specify default realm
-```
-👉 Fix:
-```bash
-\cp -f /var/lib/samba/private/krb5.conf /etc/krb5.conf
-```
-
-### 🔴 If port 53 is busy
-```bash
-ss -tulpn | grep :53
-```
-👉 Kill conflict:
-```bash
-systemctl stop systemd-resolved
-```
-
-### 🔴 If copy does NOT overwrite
-Check immutable flag:
-```bash
-lsattr /etc/krb5.conf
-```
-If you see `i`:
-```bash
-chattr -i /etc/krb5.conf
-```
-Then copy again.
 
 ---
 
-# A. Server Side (Linux – Samba AD DC)
-
-### 1. Firewall – Open all necessary AD ports
+## Firewall – Open all necessary AD ports
 ```bash
 firewall-cmd --list-services
 firewall-cmd --list-ports
@@ -172,7 +111,9 @@ firewall-cmd --list-services
 firewall-cmd --list-ports
 ```
 
-### 2. Samba AD DC – Basic DNS & Kerberos Check
+---
+
+## Samba AD DC – DNS & Kerberos Checks
 ```bash
 samba-tool dns query 127.0.0.1 tp.local _ldap._tcp SRV -U "Administrator"
 samba-tool dns query 127.0.0.1 tp.local _kerberos._tcp SRV -U "Administrator"
@@ -189,15 +130,53 @@ host server1.tp.local 127.0.0.1
 
 ---
 
-# B. Windows Client Side
+## Final Tests
+```bash
+kinit administrator
+klist
 
-### 1. DNS – Point to AD DC
+host -t SRV _ldap._tcp.tp.local
+
+ss -tulpn | grep samba
+```
+
+---
+
+# 🐧 B. LINUX CLIENT
+
+## Configure DNS
+```bash
+echo "nameserver 192.168.100.10" > /etc/resolv.conf
+```
+
+## Test DNS Resolution
+```bash
+host tp.local
+host server1.tp.local
+```
+
+## Test Kerberos
+```bash
+kinit Administrator
+klist
+```
+
+## Test LDAP / AD Connectivity
+```bash
+ldapsearch -x -H ldap://192.168.100.10 -b "dc=tp,dc=local"
+```
+
+---
+
+# 🪟 C. WINDOWS CLIENT
+
+## 1. DNS – Point to AD DC
 ```powershell
 Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses 192.168.100.10
 Get-DnsClientServerAddress
 ```
 
-### 2. Time Sync – Windows Time Service
+## 2. Time Sync – Windows Time Service
 ```powershell
 Start-Service w32time
 Set-Service w32time -StartupType Automatic
@@ -209,7 +188,7 @@ w32tm /query /status
 klist purge
 ```
 
-### 3. Firewall – Allow AD/DC ports
+## 3. Firewall – Allow AD/DC ports
 ```powershell
 New-NetFirewallRule -DisplayName "Allow Kerberos TCP 88" -Direction Inbound -Protocol TCP -LocalPort 88 -Action Allow
 New-NetFirewallRule -DisplayName "Allow Kerberos UDP 88" -Direction Inbound -Protocol UDP -LocalPort 88 -Action Allow
@@ -228,7 +207,7 @@ New-NetFirewallRule -DisplayName "Allow DNS TCP/UDP 53" -Direction Inbound -Prot
 New-NetFirewallRule -DisplayName "Allow DNS UDP 53" -Direction Inbound -Protocol UDP -LocalPort 53 -Action Allow
 ```
 
-### 4. Test AD/DC Connectivity
+## 4. Test AD/DC Connectivity
 ```powershell
 Test-NetConnection 192.168.100.10 -Port 88
 Test-NetConnection 192.168.100.10 -Port 389
@@ -237,14 +216,21 @@ Test-NetConnection 192.168.100.10 -Port 135
 Test-NetConnection 192.168.100.10 -Port 53
 ```
 
-### 5. Join Domain
+## 5. Join Domain
 ```powershell
 Add-Computer -DomainName tp.local -Credential TP\Administrator -Restart
 ```
 
+## Verify Domain
+```powershell
+nltest /dsgetdc:tp.local
+nltest /sc_query:tp.local
+```
+
 ---
 
-# C. Add Users to Groups
+# 👥 D. ADD USERS TO GROUPS (SERVER SIDE)
+
 ```bash
 sudo bash << 'EOF'
 samba-tool group addmembers IT alice,bob
@@ -258,14 +244,3 @@ EOF
 ```
 
 ---
-
-## ✅ Notes / Tips
-1. Ensure **time synchronization** between server and client (within 5 minutes).
-2. Windows must use **AD DC IP as primary DNS** before joining.
-3. All **Samba services must be running**: `samba`, `smbd`, `nmbd`, `winbindd`, `kdc`, `dns`.
-4. If AD join fails, check **RPC (135/TCP) and SMB (445/TCP)** connectivity.
-5. After successful join, verify domain:
-```powershell
-nltest /dsgetdc:tp.local
-nltest /sc_query:tp.local
-```
