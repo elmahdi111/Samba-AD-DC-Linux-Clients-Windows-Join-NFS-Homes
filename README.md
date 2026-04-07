@@ -1,32 +1,111 @@
-# Samba AD DC + File Sharing Lab — Complete Guide
-
-**Domain:** TP.LOCAL  
-**Server:** SERVER1 — 192.168.100.10 (Fedora)  
-**Client:** CLIENT1 — 192.168.100.129 (CentOS Stream 10)
+# 🧪 FULL LAB — Samba AD DC + Linux Client + Windows Join + NFS (FROM ZERO)
 
 ---
 
-## Architecture
+# 📌 LAB INFO
 
-```
-SERVER1 (192.168.100.10) — Fedora
-├── Samba AD DC (TP.LOCAL)
-├── Users: carol, dave (IT) | bob, alice (HR) | eve, frank (Finance)
-└── Shares:
-    ├── /srv/share/IT        → IT group only
-    ├── /srv/share/HR        → HR group only
-    ├── /srv/share/Finance   → Finance group only
-    └── /srv/share/Documents → All Domain Users
+- Domain: TP.LOCAL
+- NetBIOS: TP
+- Server: SERVER1
+- IP Server: 192.168.100.10
+- Client Linux: CLIENT1
+- Network: 192.168.100.0/24
 
-CLIENT1 (192.168.100.129) — CentOS Stream 10
-└── SSSD joined to TP.LOCAL → AD authentication working
+---
+
+# 🖥️ SERVER1 (ROCKY / RHEL / CENTOS)
+
+---
+
+## 1️⃣ Set Hostname
+
+```bash
+hostnamectl set-hostname server1.tp.local
 ```
 
 ---
 
-## SERVER SIDE
+## 2️⃣ Configure IP Address
 
-### 1. Create AD Groups
+```bash
+nmcli con show
+nmcli con mod "System eth0" ipv4.addresses 192.168.100.10/24
+nmcli con mod "System eth0" ipv4.gateway 192.168.100.1
+nmcli con mod "System eth0" ipv4.dns 127.0.0.1
+nmcli con mod "System eth0" ipv4.method manual
+nmcli con up "System eth0"
+```
+
+---
+
+## 3️⃣ Update /etc/hosts
+
+```bash
+nano /etc/hosts
+```
+
+```
+192.168.100.10 server1.tp.local server1
+```
+
+---
+
+## 4️⃣ Install Packages
+
+```bash
+dnf update -y
+dnf install samba samba-dc samba-client krb5-workstation -y
+```
+
+---
+
+## 5️⃣ Stop Default Services
+
+```bash
+systemctl disable --now smb nmb winbind
+```
+
+---
+
+## 6️⃣ Provision Domain
+
+```bash
+samba-tool domain provision --use-rfc2307 --interactive
+```
+
+```
+Realm: TP.LOCAL
+Domain: TP
+Server Role: DC
+DNS Backend: SAMBA_INTERNAL
+DNS Forwarder: 8.8.8.8
+Administrator Password: Admin@123
+```
+
+---
+
+## 7️⃣ Start Samba AD DC
+
+```bash
+systemctl enable --now samba
+```
+
+---
+
+## 8️⃣ Verify
+
+```bash
+samba-tool user list
+samba-tool group list
+```
+
+---
+
+# 👥 USERS & GROUPS
+
+---
+
+## Create Groups
 
 ```bash
 samba-tool group add IT
@@ -34,331 +113,336 @@ samba-tool group add HR
 samba-tool group add Finance
 ```
 
-### 2. Create AD Users and Add to Groups
+---
+
+## Create Users
 
 ```bash
-# Create users
-samba-tool user create carol
-samba-tool user create dave
-samba-tool user create bob
-samba-tool user create alice
-samba-tool user create eve
-samba-tool user create frank
-
-# Set passwords
-for user in carol dave bob alice eve frank; do
-  samba-tool user setpassword $user --newpassword="Admin@123"
+for u in carol dave bob alice eve frank; do
+  samba-tool user create $u Admin@123
 done
+```
 
-# Add users to groups
+---
+
+## Add Users to Groups
+
+```bash
 samba-tool group addmembers IT carol dave
 samba-tool group addmembers HR bob alice
 samba-tool group addmembers Finance eve frank
 ```
 
-### 3. Create Share Directories
+---
+
+# 📂 SAMBA SHARES
+
+---
+
+## Create Directories
 
 ```bash
-mkdir -p /srv/share/IT /srv/share/HR /srv/share/Finance /srv/share/Documents
-chmod 777 /srv/share/IT /srv/share/HR /srv/share/Finance /srv/share/Documents
+mkdir -p /srv/share/{IT,HR,Finance,Documents}
+chmod 777 /srv/share/*
 ```
 
-### 4. Configure /etc/samba/smb.conf
+---
 
-```ini
-# Global parameters
+## Configure Samba
+
+```bash
+nano /etc/samba/smb.conf
+```
+
+```
 [global]
-        dns forwarder = 127.0.0.53
-        netbios name = SERVER1
-        realm = TP.LOCAL
-        server role = active directory domain controller
-        workgroup = TP
-        idmap_ldb:use rfc2307 = yes
+   workgroup = TP
+   realm = TP.LOCAL
+   netbios name = SERVER1
+   server role = active directory domain controller
+   dns forwarder = 8.8.8.8
+   idmap_ldb:use rfc2307 = yes
 
 [sysvol]
-        path = /var/lib/samba/sysvol
-        read only = No
+   path = /var/lib/samba/sysvol
+   read only = no
 
 [netlogon]
-        path = /var/lib/samba/sysvol/tp.local/scripts
-        read only = No
+   path = /var/lib/samba/sysvol/tp.local/scripts
+   read only = no
 
 [IT]
    path = /srv/share/IT
    browseable = yes
    writable = yes
    valid users = @"TP\IT"
-   create mask = 0666
-   directory mask = 0777
 
 [HR]
    path = /srv/share/HR
    browseable = yes
    writable = yes
    valid users = @"TP\HR"
-   create mask = 0666
-   directory mask = 0777
 
 [Finance]
    path = /srv/share/Finance
    browseable = yes
    writable = yes
    valid users = @"TP\Finance"
-   create mask = 0666
-   directory mask = 0777
 
 [Documents]
    path = /srv/share/Documents
    browseable = yes
    writable = yes
    valid users = @"TP\Domain Users"
-   create mask = 0666
-   directory mask = 0777
-```
-
-### 5. Add Kerberos SPN for IP Address
-
-```bash
-samba-tool spn add ldap/192.168.100.10 SERVER1$
-```
-
-### 6. Restart and Verify Samba
-
-```bash
-testparm -s
-systemctl restart samba
-systemctl status samba
 ```
 
 ---
 
-## CLIENT SIDE
-
-### 1. Install Required Packages
+## Restart
 
 ```bash
-sudo dnf install sssd sssd-ad adcli krb5-workstation \
-  oddjob-mkhomedir samba-client cifs-utils -y
+systemctl restart samba
 ```
 
-### 2. Configure /etc/hosts
+---
+
+# 🌐 DNS FIX
+
+---
 
 ```bash
-sudo nano /etc/hosts
+samba-tool dns add localhost _msdcs.tp.local _ldap._tcp.dc SRV "0 100 389 server1.tp.local" -U Administrator
+samba-tool dns add localhost _msdcs.tp.local _kerberos._tcp.dc SRV "0 100 88 server1.tp.local" -U Administrator
+samba-tool dns add localhost _msdcs.tp.local _gc._tcp.dc SRV "0 100 3268 server1.tp.local" -U Administrator
 ```
 
-Add:
-```
-192.168.100.10   server1.tp.local server1
-192.168.100.129  client1.tp.local client1
-```
+---
 
-### 3. Configure Kerberos (/etc/krb5.conf)
+# 📡 NFS SERVER
 
-```ini
-[libdefaults]
-    default_realm = TP.LOCAL
-    dns_lookup_realm = false
-    dns_lookup_kdc = false
-    rdns = false
-    forwardable = true
-    ticket_lifetime = 24h
-    renew_lifetime = 7d
+---
 
-[realms]
-    TP.LOCAL = {
-        kdc = server1.tp.local
-        admin_server = server1.tp.local
-    }
-
-[domain_realm]
-    .tp.local = TP.LOCAL
-    tp.local = TP.LOCAL
-```
-
-### 4. Join the Domain
+## Install
 
 ```bash
-sudo realm join -U Administrator TP.LOCAL
+dnf install nfs-utils -y
 ```
 
-Enter Administrator's password when prompted.
+---
 
-### 5. Configure SSSD (/etc/sssd/sssd.conf)
+## Configure
 
-```ini
+```bash
+chown -R nfsnobody:nfsnobody /home
+chmod 755 /home
+```
+
+---
+
+```bash
+nano /etc/exports
+```
+
+```
+/home 192.168.100.0/24(rw,sync,no_root_squash)
+```
+
+---
+
+## Start
+
+```bash
+systemctl enable --now nfs-server
+exportfs -rav
+```
+
+---
+
+# 🖥️ CLIENT1 (LINUX)
+
+---
+
+## 1️⃣ Hostname
+
+```bash
+hostnamectl set-hostname client1.tp.local
+```
+
+---
+
+## 2️⃣ IP CONFIG
+
+```bash
+nmcli con mod "System eth0" ipv4.addresses 192.168.100.20/24
+nmcli con mod "System eth0" ipv4.gateway 192.168.100.1
+nmcli con mod "System eth0" ipv4.dns 192.168.100.10
+nmcli con mod "System eth0" ipv4.method manual
+nmcli con up "System eth0"
+```
+
+---
+
+## 3️⃣ /etc/hosts
+
+```bash
+nano /etc/hosts
+```
+
+```
+192.168.100.10 server1.tp.local
+```
+
+---
+
+## 4️⃣ Install Packages
+
+```bash
+dnf install sssd sssd-ad adcli krb5-workstation oddjob-mkhomedir samba-client -y
+```
+
+---
+
+## 5️⃣ Join Domain
+
+```bash
+realm join -U Administrator TP.LOCAL
+```
+
+---
+
+## 6️⃣ Configure SSSD
+
+```bash
+nano /etc/sssd/sssd.conf
+```
+
+```
 [sssd]
 domains = tp.local
-config_file_version = 2
 services = nss, pam
 
 [domain/tp.local]
 id_provider = ad
 access_provider = permit
-auth_provider = ad
-chpass_provider = ad
-ad_domain = tp.local
-ad_server = server1.tp.local
-override_homedir = /home/%u
-default_shell = /bin/bash
 use_fully_qualified_names = False
 fallback_homedir = /home/%u
-ldap_id_mapping = True
-enumerate = True
-cache_credentials = True
-ad_enable_gc = False
-krb5_auth_timeout = 15
-```
-
-```bash
-sudo chmod 600 /etc/sssd/sssd.conf
-```
-
-### 6. Enable Home Directory Auto-Creation
-
-```bash
-sudo authselect select sssd with-mkhomedir --force
-sudo systemctl enable --now oddjobd
-```
-
-### 7. Restart SSSD and Clear Cache
-
-```bash
-sudo systemctl stop sssd
-sudo rm -rf /var/lib/sss/db/*
-sudo rm -rf /var/lib/sss/mc/*
-sudo systemctl start sssd
-sudo systemctl enable sssd
-```
-
-### 8. Create Home Directories for AD Users
-
-```bash
-for user in carol dave bob alice eve frank; do
-  sudo mkdir -p /home/$user
-  sudo chown $user /home/$user
-  sudo chmod 700 /home/$user
-done
+default_shell = /bin/bash
 ```
 
 ---
 
-## Verification
-
-### Verify AD Integration on Client
+## 7️⃣ Enable Home Creation
 
 ```bash
-# Verify users
-getent passwd carol
+authselect select sssd with-mkhomedir --force
+systemctl enable --now oddjobd
+systemctl restart sssd
+```
+
+---
+
+## 8️⃣ Test
+
+```bash
+su - carol
 id carol
-
-# Verify groups
-getent group "IT"
-getent group "HR"
-getent group "Finance"
-getent group "Domain Users"
 ```
 
-Expected output:
-```
-carol:*:472001108:472000513:Carol White:/home/carol:/bin/bash
-it:*:472001104:carol,dave
-hr:*:472001103:bob,alice
-finance:*:472001105:eve,frank
-```
+---
 
-### Test Share Access from Linux Client
+# 📡 NFS CLIENT
+
+---
 
 ```bash
-# carol (IT member) → ACCESS GRANTED
-smbclient //192.168.100.10/IT -U "TP\carol%Admin@123" -c "ls"
-
-# bob (HR member) → ACCESS DENIED on IT share
-smbclient //192.168.100.10/IT -U "TP\bob%Admin@123" -c "ls"
-
-# bob (HR member) → ACCESS GRANTED on HR share
-smbclient //192.168.100.10/HR -U "TP\bob%Admin@123" -c "ls"
-
-# Upload a file
-echo "Hello from carol" > /tmp/test.txt
-smbclient //192.168.100.10/IT -U "TP\carol%Admin@123" -c "put /tmp/test.txt test.txt"
-
-# Download a file
-smbclient //192.168.100.10/IT -U "TP\carol%Admin@123" -c "get test.txt /tmp/downloaded.txt"
-cat /tmp/downloaded.txt
+mkdir -p /home
+mount -t nfs 192.168.100.10:/home /home
 ```
 
-### Mount Share on Linux Client
+---
 
-```bash
-sudo mkdir -p /mnt/IT
-sudo mount -t cifs //192.168.100.10/IT /mnt/IT \
-  -o username=carol,password=Admin@123,domain=TP,noperm
+# 🪟 WINDOWS 10
+
+---
+
+## DNS
+
+```
+192.168.100.10
 ```
 
-### Test Share Access from Windows Client
+---
+
+## TEST
 
 ```cmd
-REM Connect to share
-net use \\192.168.100.10\IT /user:TP\carol Admin@123
-
-REM Map as network drive
-net use Z: \\192.168.100.10\IT /user:TP\carol Admin@123
-
-REM Disconnect all
-net use * /delete
+nslookup tp.local
+nslookup -type=SRV _ldap._tcp.dc._msdcs.tp.local
 ```
 
 ---
 
-## Access Control Summary
+## JOIN DOMAIN
 
-| Share | Path | Allowed Users |
-|---|---|---|
-| IT | /srv/share/IT | carol, dave (IT group) |
-| HR | /srv/share/HR | bob, alice (HR group) |
-| Finance | /srv/share/Finance | eve, frank (Finance group) |
-| Documents | /srv/share/Documents | All Domain Users |
+```
+System → Change settings → Domain: TP.LOCAL
+```
 
 ---
 
-## Troubleshooting
+## LOGIN
+
+```
+TP\carol
+Password: Admin@123
+```
+
+---
+
+# ✅ FINAL TESTS
+
+---
+
+## Samba
 
 ```bash
-# Check Samba service
-systemctl status samba
-
-# Check AD users and groups
-samba-tool user list
-samba-tool group list
-samba-tool group listmembers IT
-
-# Check SSSD logs
-sudo journalctl -u sssd --no-pager | tail -30
-sudo tail -30 /var/log/sssd/sssd_tp.local.log
-
-# Check firewall (server)
-firewall-cmd --list-services   # should include: samba
-
-# Check Samba is listening
-ss -tlnp | grep 445
-
-# Reset a user password
-samba-tool user setpassword carol --newpassword="Admin@123"
-
-# Clear SSSD cache
-sudo systemctl stop sssd
-sudo rm -rf /var/lib/sss/db/*
-sudo rm -rf /var/lib/sss/mc/*
-sudo systemctl start sssd
+smbclient //localhost/IT -U "TP\carol%Admin@123"
 ```
 
 ---
 
-## Key Notes
+## Access
 
-- `ad_enable_gc = False` — disables Global Catalog (port 3268) which Samba AD DC does not support
-- `access_provider = permit` — allows all AD users to login via GUI (PAM)
-- `use_fully_qualified_names = False` — allows login as `carol` instead of `carol@tp.local`
-- Group names in smb.conf must use domain prefix: `@"TP\IT"` not `@IT`
-- Windows allows only one credential set per server — run `net use * /delete` before switching users
+| User | Access |
+|------|--------|
+| carol | IT ✅ |
+| bob | HR ✅ |
+| bob | IT ❌ |
+
+---
+
+# ⚠️ IMPORTANT
+
+- Always use: @"TP\GROUP"
+- DNS must point to SERVER1
+- Restart services after config
+- Firewall may need to be disabled:
+
+```bash
+systemctl disable --now firewalld
+setenforce 0
+```
+
+---
+
+# 🎯 RESULT
+
+You now have:
+
+- Samba AD Domain Controller
+- Linux joined to AD
+- Windows joined to AD
+- Group-based shares
+- NFS home directories
+
+---
