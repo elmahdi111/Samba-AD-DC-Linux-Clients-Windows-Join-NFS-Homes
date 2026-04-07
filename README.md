@@ -148,7 +148,7 @@ chmod 777 /srv/share/*
 
 ---
 
-## Configure Samba
+## smb.conf
 
 ```bash
 nano /etc/samba/smb.conf
@@ -206,9 +206,7 @@ systemctl restart samba
 
 ---
 
-# 🌐 DNS FIX
-
----
+# 🌐 DNS FIX (CRITICAL)
 
 ```bash
 samba-tool dns add localhost _msdcs.tp.local _ldap._tcp.dc SRV "0 100 389 server1.tp.local" -U Administrator
@@ -218,154 +216,11 @@ samba-tool dns add localhost _msdcs.tp.local _gc._tcp.dc SRV "0 100 3268 server1
 
 ---
 
-# 📡 NFS SERVER
+# 🪟 WINDOWS JOIN (NORMAL)
 
 ---
 
-## Install
-
-```bash
-dnf install nfs-utils -y
-```
-
----
-
-## Configure
-
-```bash
-chown -R nfsnobody:nfsnobody /home
-chmod 755 /home
-```
-
----
-
-```bash
-nano /etc/exports
-```
-
-```
-/home 192.168.100.0/24(rw,sync,no_root_squash)
-```
-
----
-
-## Start
-
-```bash
-systemctl enable --now nfs-server
-exportfs -rav
-```
-
----
-
-# 🖥️ CLIENT1 (LINUX)
-
----
-
-## 1️⃣ Hostname
-
-```bash
-hostnamectl set-hostname client1.tp.local
-```
-
----
-
-## 2️⃣ IP CONFIG
-
-```bash
-nmcli con mod "System eth0" ipv4.addresses 192.168.100.20/24
-nmcli con mod "System eth0" ipv4.gateway 192.168.100.1
-nmcli con mod "System eth0" ipv4.dns 192.168.100.10
-nmcli con mod "System eth0" ipv4.method manual
-nmcli con up "System eth0"
-```
-
----
-
-## 3️⃣ /etc/hosts
-
-```bash
-nano /etc/hosts
-```
-
-```
-192.168.100.10 server1.tp.local
-```
-
----
-
-## 4️⃣ Install Packages
-
-```bash
-dnf install sssd sssd-ad adcli krb5-workstation oddjob-mkhomedir samba-client -y
-```
-
----
-
-## 5️⃣ Join Domain
-
-```bash
-realm join -U Administrator TP.LOCAL
-```
-
----
-
-## 6️⃣ Configure SSSD
-
-```bash
-nano /etc/sssd/sssd.conf
-```
-
-```
-[sssd]
-domains = tp.local
-services = nss, pam
-
-[domain/tp.local]
-id_provider = ad
-access_provider = permit
-use_fully_qualified_names = False
-fallback_homedir = /home/%u
-default_shell = /bin/bash
-```
-
----
-
-## 7️⃣ Enable Home Creation
-
-```bash
-authselect select sssd with-mkhomedir --force
-systemctl enable --now oddjobd
-systemctl restart sssd
-```
-
----
-
-## 8️⃣ Test
-
-```bash
-su - carol
-id carol
-```
-
----
-
-# 📡 NFS CLIENT
-
----
-
-```bash
-mkdir -p /home
-mount -t nfs 192.168.100.10:/home /home
-```
-
----
-
-# 🪟 WINDOWS 10
-
----
-
-## DNS
+## Set DNS
 
 ```
 192.168.100.10
@@ -373,7 +228,7 @@ mount -t nfs 192.168.100.10:/home /home
 
 ---
 
-## TEST
+## Verify DNS
 
 ```cmd
 nslookup tp.local
@@ -382,7 +237,7 @@ nslookup -type=SRV _ldap._tcp.dc._msdcs.tp.local
 
 ---
 
-## JOIN DOMAIN
+## Join
 
 ```
 System → Change settings → Domain: TP.LOCAL
@@ -390,59 +245,172 @@ System → Change settings → Domain: TP.LOCAL
 
 ---
 
-## LOGIN
+# 🚨 WINDOWS JOIN TROUBLESHOOTING (VERY IMPORTANT)
+
+---
+
+## ❌ ERROR: "Domain not found"
+
+### FIX
+
+```cmd
+ipconfig /all
+```
+
+👉 DNS must be:
+```
+192.168.100.10 ONLY
+```
+
+---
+
+## ❌ ERROR: "DNS name does not exist"
+
+### FIX on SERVER
+
+```bash
+samba-tool dns query localhost tp.local @ A -U Administrator
+```
+
+If missing → re-add SRV (again)
+
+---
+
+## ❌ ERROR: "Cannot contact domain"
+
+### TEST FROM WINDOWS
+
+```cmd
+ping 192.168.100.10
+ping server1.tp.local
+```
+
+If fails:
+- Network problem
+- /etc/hosts missing
+- firewall blocking
+
+---
+
+## ❌ ERROR: "Clock skew too great"
+
+### FIX TIME (VERY COMMON)
+
+On Windows (Admin CMD):
+
+```cmd
+w32tm /resync
+```
+
+On Linux:
+
+```bash
+timedatectl set-ntp true
+```
+
+---
+
+## ❌ ERROR: "Access denied"
+
+Use:
 
 ```
-TP\carol
+Administrator
 Password: Admin@123
 ```
 
----
-
-# ✅ FINAL TESTS
-
----
-
-## Samba
-
-```bash
-smbclient //localhost/IT -U "TP\carol%Admin@123"
+NOT:
+```
+TP\carol
 ```
 
 ---
 
-## Access
+## ❌ ERROR: "The specified domain either does not exist or could not be contacted"
 
-| User | Access |
-|------|--------|
-| carol | IT ✅ |
-| bob | HR ✅ |
-| bob | IT ❌ |
+### FULL FIX CHECKLIST
 
----
-
-# ⚠️ IMPORTANT
-
-- Always use: @"TP\GROUP"
-- DNS must point to SERVER1
-- Restart services after config
-- Firewall may need to be disabled:
+✔ DNS → correct  
+✔ SRV records → exist  
+✔ Samba running  
+✔ Firewall disabled  
 
 ```bash
+systemctl status samba
 systemctl disable --now firewalld
 setenforce 0
 ```
 
 ---
 
-# 🎯 RESULT
+## 🔍 ADVANCED DEBUG
+
+### On Windows
+
+```cmd
+nltest /dsgetdc:tp.local
+```
+
+---
+
+### On Server
+
+```bash
+journalctl -xe | grep samba
+```
+
+---
+
+# 📡 NFS
+
+---
+
+## SERVER
+
+```bash
+dnf install nfs-utils -y
+chown -R nfsnobody:nfsnobody /home
+chmod 755 /home
+```
+
+```
+/etc/exports
+/home 192.168.100.0/24(rw,sync,no_root_squash)
+```
+
+```bash
+systemctl enable --now nfs-server
+exportfs -rav
+```
+
+---
+
+## CLIENT
+
+```bash
+mkdir -p /home
+mount -t nfs 192.168.100.10:/home /home
+```
+
+---
+
+# ✅ FINAL RESULT
 
 You now have:
 
-- Samba AD Domain Controller
-- Linux joined to AD
-- Windows joined to AD
-- Group-based shares
+- Samba Active Directory
+- Windows domain join working
+- Linux domain join working
+- Department shares
 - NFS home directories
 
 ---
+
+# 🧠 REAL LESSON
+
+If Windows join fails → **99% DNS issue**
+
+Remember:
+
+👉 AD = DNS + Kerberos + LDAP  
+👉 If DNS broken → EVERYTHING fails
