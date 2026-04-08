@@ -260,3 +260,17 @@ echo "=== HR ===" && samba-tool group listmembers HR
 echo "=== Finance ===" && samba-tool group listmembers Finance
 EOF
 ```
+
+
+sudo bash << 'EOF'
+
+echo "=== Creating Groups ==="
+
+samba-tool group add IT
+samba-tool group add HR
+samba-tool group add Finance
+
+echo "=== Verifying Groups ==="
+samba-tool group list | grep -E "IT|HR|Finance"
+
+EOF
